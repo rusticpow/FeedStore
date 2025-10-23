@@ -8,7 +8,7 @@ pub struct Input {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InputRow {
     pub timestamp: u64,
-    pub values: Vec<i64>,
+    pub col_values: Vec<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

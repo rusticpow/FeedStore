@@ -1,43 +1,63 @@
-use std::vec;
+use std::sync::{Arc, Mutex};
 
-use super::{input::Input, piece_column::PieceColumn};
+use super::{min_max_ts::MinMaxTs, piece_column::PieceColumn};
+use super::input::Input;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct PieceKey {
     pub name: String,
-    pub columns: Vec<PieceColumn>,
+    pub columns: Arc<Mutex<Vec<PieceColumn>>>,
 }
 
 impl PieceKey {
     pub fn new(name: &str) -> PieceKey {
         PieceKey {
             name: name.to_owned(),
-            columns: vec![],
+            columns: Arc::new(Mutex::new(vec![])),
         }
     }
 
-    pub fn add_records(&mut self, input: &Input) {
+    pub fn add_records(&self, input: &Input) -> MinMaxTs {
+        let mut min_max = MinMaxTs::new();
+        let mut columns = self.columns.lock().unwrap();
         for input_row in &input.rows {
             for (i, input_col) in input.cols.iter().enumerate() {
-                let piece_col = match self
-                    .columns
+                let piece_col = match 
+                    columns
                     .iter_mut()
                     .find(|x| x.column_name.eq(&input_col.col_name))
                 {
                     Some(piece_col) => piece_col,
                     None => {
                         let col = PieceColumn::new(&input_col.col_name);
-                        self.columns.push(col);
-                        self.columns.last_mut().unwrap()
+                        columns.push(col);
+                        columns.last_mut().unwrap()
                     }
                 };
 
                 piece_col.add(
-                    input_row.values[i],
+                    input_row.col_values[i],
                     input_row.timestamp,
                     input_col.precision,
                 );
+                min_max.set(input_row.timestamp);
             }
+        }
+
+        min_max
+    }
+
+    pub fn get_exact(&self, col: &str, ts: u64) -> Option<(i64, u8)> {
+        let columns = self.columns.lock().unwrap();
+        if columns.is_empty() {
+            return None;
+        }
+
+        let column = columns.iter().find(|x| x.column_name.eq(col))?;
+        if let Some((val, pre)) = column.get_exact(ts) {
+            Some((val, pre))
+        } else {
+            None
         }
     }
 }
@@ -60,13 +80,14 @@ mod tests {
             }],
             rows: vec![InputRow {
                 timestamp: 33,
-                values: vec![101],
+                col_values: vec![101],
             }],
         };
 
         key.add_records(&input);
 
-        let piece_col = &key.columns[0];
+        let columns = key.columns.lock().unwrap();
+        let piece_col = &columns[0];
         let (val, pre) = piece_col.get_exact(33).unwrap();
 
         assert_eq!((val, pre), (101, 2));

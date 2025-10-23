@@ -1,112 +1,101 @@
-use std::{
-    cmp::{max, min},
-    u64,
-};
+use std::sync::{Arc, Mutex, RwLock};
 
 use super::{
-    input::{self, Input, InputCol, InputRow},
-    piece_column::PieceColumn, piece_key::PieceKey,
+    input::Input,
+    min_max_ts::MinMaxTs,
+    piece_key::{self, PieceKey},
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PieceHeader {
-    pub ts_from: u64,
-    pub ts_to: u64,
-    pub key_names: Vec<String>,
-    pub col_names: Vec<String>,
+#[derive(Debug)]
+pub struct Piece {
+    pub min_max_ts: Mutex<MinMaxTs>,
     pub compressed_size: u32,
     pub uncompressed_size: u32,
     pub compression: u8,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PieceBody {
-    pub keys: Vec<PieceKey>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ValueColumn {
-    start_index: u32,
-    records: Vec<i64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Piece {
-    pub header: PieceHeader,
-    pub body: PieceBody,
+    pub keys: Arc<RwLock<Vec<PieceKey>>>,
 }
 
 impl Piece {
     pub fn new() -> Piece {
         Piece {
-            header: PieceHeader {
-                ts_from: u64::MAX,
-                ts_to: u64::MIN,
-                key_names: vec![],
-                col_names: vec![],
-                compressed_size: 0,
-                uncompressed_size: 0,
-                compression: 0,
-            },
-            body: PieceBody { keys: vec![] },
+            min_max_ts: Mutex::new(MinMaxTs::default()),
+            compressed_size: 0,
+            uncompressed_size: 0,
+            compression: 0,
+            keys: Arc::new(RwLock::new(Vec::new())),
         }
     }
 
-    pub fn append(&mut self, input: Input) {
+    pub fn append(&self, input: &Input) {
+        let read = self.keys.read().unwrap();
+        let piece_key = read.iter().find(|x| x.name.eq(&input.key_name));
 
-        //        self.populate(key_index, input);
+        let piece_key = match piece_key {
+            Some(piece_key) => {
+                let piece_key = piece_key.clone();
+                drop(read);
+
+                piece_key
+            }
+            None => {
+                drop(read);
+
+                let piece_key = PieceKey::new(input.key_name.as_ref());
+                let clone = piece_key.clone();
+
+                let mut write = self.keys.write().unwrap();
+                write.push(piece_key);
+
+                clone
+            }
+        };
+
+        let min_max_ts = piece_key.add_records(input);
+        let mut min_max_ts_lock = self.min_max_ts.lock().unwrap();
+        min_max_ts_lock.merge(&min_max_ts);
     }
 
-    fn populate(&mut self, key_index: usize, mut input: Input) {
-        let mut min_ts = u64::MAX;
-        let mut max_ts = u64::MIN;
+    pub fn get_exact(&self, key_name: &str, col_name: &str, ts: u64) -> Option<(i64, u8)> {
+        let read = self.keys.read().unwrap();
+        let piece_key = read.iter().find(|x| x.name.eq(&key_name));
+        match piece_key {
+            Some(piece_key) => {
+                let piece_key = piece_key.clone();
+                drop(read);
 
-        // add columns if not exist
-        for input_col in input.cols.into_iter() {}
-
-        for column in &self.header.col_names {}
-
-        self.header.ts_from = min(self.header.ts_from, min_ts);
-        self.header.ts_to = max(self.header.ts_to, max_ts);
+                piece_key.get_exact(col_name, ts)
+            }
+            None => None,
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::vec;
+
     use crate::structs::input::{Input, InputCol, InputRow};
 
     use super::Piece;
 
     #[test]
     fn append_input_to_piece() {
-        // let input = Input {
-        //     key_name: "XAUUSD".to_string(),
-        //     cols: vec![
-        //         InputCol {
-        //             col_name: "ask".to_owned(),
-        //             precision: 2,
-        //         },
-        //         InputCol {
-        //             col_name: "bid".to_owned(),
-        //             precision: 2,
-        //         },
-        //     ],
-        //     rows: vec![InputRow {
-        //         ts: 101,
-        //         values: vec![990, 110],
-        //     }],
-        // };
-        //
-        // let mut piece = Piece::new();
-        // piece.append(input.clone());
-        //
-        // assert_eq!(piece.header.ts_from, 101);
-        // assert_eq!(piece.header.ts_to, 101);
-        // assert_eq!(piece.body.name_ts[0], vec![101]);
-        // assert_eq!(piece.body.name_values[0]);
-        //
-        // let piece_from_input = piece.get_by_name("XAUUSD").unwrap();
-        //     //
-        //     assert_eq!(input, piece_from_input);
+        let mut piece = Piece::new();
+        let input = Input {
+            key_name: "XAUUSD".to_string(),
+            cols: vec![InputCol {
+                col_name: "ask".to_string(),
+                precision: 100,
+            }],
+            rows: vec![InputRow {
+                timestamp: 101,
+                col_values: vec![2],
+            }],
+        };
+
+        piece.append(&input);
+
+        let piece_1 = piece.get_exact("XAUUSD", "ask",  101).unwrap();
+        assert_eq!(piece_1, (2, 100));
     }
 }
